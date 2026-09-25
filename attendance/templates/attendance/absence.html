@@ -1,0 +1,156 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrahead %}
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    :root { --brand: #7C3AED; --brand-dark: #5B21B6; }
+    .wrap { max-width: 1100px; margin: 24px auto; direction: rtl; font-family: 'Cairo', sans-serif; }
+    .filters {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: end;
+      background: #faf5ff; border: 1px solid #e9d5ff; padding: 16px; border-radius: 12px;
+    }
+    .filters .field { display: flex; flex-direction: column; font-size: 13px; }
+    .filters input, .filters select {
+      padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;
+    }
+    .btn {
+      background: var(--brand); color: #fff; border: none; padding: 9px 18px;
+      border-radius: 8px; cursor: pointer; font-size: 14px; height: 36px;
+    }
+    .btn:hover { background: var(--brand-dark); }
+    .btn.outline { background: #fff; color: var(--brand); border: 1px solid var(--brand); }
+    table.att { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 13px; }
+    table.att th, table.att td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: center; }
+    table.att th { background: #f3e8ff; }
+    .badge { padding: 2px 10px; border-radius: 999px; font-size: 12px; }
+    .badge.present { background: #dcfce7; color: #166534; }
+    .badge.absent { background: #fee2e2; color: #991b1b; }
+    .badge.leave { background: #dbeafe; color: #1e40af; }
+    .badge.permission { background: #fef9c3; color: #854d0e; }
+    .badge.weekend { background: #e5e7eb; color: #374151; }
+    .pager { display: flex; gap: 8px; justify-content: center; margin-top: 14px; align-items: center; }
+    #kpi { margin-top: 12px; font-weight: bold; color: var(--brand-dark); }
+  </style>
+{% endblock %}
+
+{% block content %}
+<div class="wrap">
+  <h2><i class="fa-solid fa-user-xmark"></i> تقرير الحضور والغياب</h2>
+
+  <div class="filters">
+    <div class="field">
+      <label>بحث (اسم / رقم بصمة)</label>
+      <input type="text" id="q" placeholder="اكتب هنا...">
+    </div>
+    <div class="field">
+      <label>الحالة</label>
+      <select id="status">
+        <option value="">الكل</option>
+        <option value="present">حاضر</option>
+        <option value="absent">غائب</option>
+        <option value="leave">إجازة</option>
+        <option value="permission">إذن</option>
+        <option value="weekend">إجازة أسبوعية</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>من تاريخ</label>
+      <input type="date" id="date_from">
+    </div>
+    <div class="field">
+      <label>إلى تاريخ</label>
+      <input type="date" id="date_to">
+    </div>
+    <button class="btn" id="searchBtn"><i class="fa-solid fa-magnifying-glass"></i> بحث</button>
+    <button class="btn outline" id="recalcBtn"><i class="fa-solid fa-rotate"></i> إعادة حساب الفترة</button>
+  </div>
+
+  <div id="kpi"></div>
+
+  <table class="att">
+    <thead>
+      <tr>
+        <th>الموظف</th><th>رقم البصمة</th><th>التاريخ</th><th>الحضور</th>
+        <th>الانصراف</th><th>ساعات العمل</th><th>الحالة</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <div class="pager" id="pager"></div>
+</div>
+
+<script>
+function getCookie(name) {
+  const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return v ? v.pop() : '';
+}
+const csrftoken = getCookie('csrftoken');
+let currentPage = 1;
+
+function buildQuery(page) {
+  const params = new URLSearchParams({
+    q: document.getElementById('q').value,
+    status: document.getElementById('status').value,
+    date_from: document.getElementById('date_from').value,
+    date_to: document.getElementById('date_to').value,
+    page: page,
+  });
+  return params.toString();
+}
+
+function loadData(page = 1) {
+  currentPage = page;
+  fetch("{% url 'attendance:absence_list_api' %}?" + buildQuery(page))
+    .then(r => r.json())
+    .then(render);
+}
+
+function render(data) {
+  document.getElementById('kpi').innerText = `إجمالي أيام الغياب في نطاق البحث: ${data.absent_total} — إجمالي السجلات: ${data.total}`;
+  document.getElementById('tbody').innerHTML = data.results.map(r => `
+    <tr>
+      <td>${r.employee}</td>
+      <td>${r.fingerprint_id}</td>
+      <td>${r.date}</td>
+      <td>${r.check_in}</td>
+      <td>${r.check_out}</td>
+      <td>${r.worked_hours}</td>
+      <td><span class="badge ${r.status_code}">${r.status}</span></td>
+    </tr>`).join('') || '<tr><td colspan="7">لا توجد نتائج</td></tr>';
+
+  document.getElementById('pager').innerHTML = `
+    <button class="btn outline" ${!data.has_previous ? 'disabled' : ''} onclick="loadData(${data.current_page - 1})">
+      <i class="fa-solid fa-arrow-right"></i> السابق
+    </button>
+    <span>صفحة ${data.current_page} من ${data.num_pages || 1}</span>
+    <button class="btn outline" ${!data.has_next ? 'disabled' : ''} onclick="loadData(${data.current_page + 1})">
+      التالي <i class="fa-solid fa-arrow-left"></i>
+    </button>`;
+}
+
+document.getElementById('searchBtn').addEventListener('click', () => loadData(1));
+
+document.getElementById('recalcBtn').addEventListener('click', () => {
+  const date_from = document.getElementById('date_from').value;
+  const date_to = document.getElementById('date_to').value;
+  if (!date_from || !date_to) { alert('حدد الفترة (من - إلى) الأول'); return; }
+
+  const formData = new FormData();
+  formData.append('date_from', date_from);
+  formData.append('date_to', date_to);
+  formData.append('fingerprint_id', document.getElementById('q').value);
+
+  fetch("{% url 'attendance:recalculate_api' %}", {
+    method: 'POST', headers: { 'X-CSRFToken': csrftoken }, body: formData,
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) { alert(`تم حساب ${data.calculated} سجل يوم/موظف`); loadData(1); }
+      else alert(data.error);
+    });
+});
+
+loadData(1);
+</script>
+{% endblock %}

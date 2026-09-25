@@ -1,0 +1,141 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block extrahead %}
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    :root { --brand: #7C3AED; --brand-dark: #5B21B6; }
+    .import-wrap { max-width: 900px; margin: 24px auto; direction: rtl; font-family: 'Cairo', sans-serif; }
+    .drop-zone {
+      border: 2px dashed var(--brand); border-radius: 12px; padding: 40px;
+      text-align: center; background: #faf5ff; cursor: pointer; transition: .2s;
+    }
+    .drop-zone:hover { background: #f3e8ff; }
+    .drop-zone i { font-size: 40px; color: var(--brand); }
+    .btn {
+      background: var(--brand); color: #fff; border: none; padding: 10px 22px;
+      border-radius: 8px; cursor: pointer; font-size: 14px;
+    }
+    .btn:hover { background: var(--brand-dark); }
+    .btn.secondary { background: #e5e7eb; color: #111; }
+    table.preview { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+    table.preview th, table.preview td { border: 1px solid #e5e7eb; padding: 6px 10px; text-align: right; }
+    table.preview th { background: #f3e8ff; }
+    tr.row-error { background: #fee2e2; }
+    .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+    .badge.ok { background: #dcfce7; color: #166534; }
+    .badge.err { background: #fee2e2; color: #991b1b; }
+    #summary { margin-top: 14px; font-weight: bold; }
+  </style>
+{% endblock %}
+
+{% block content %}
+<div class="import-wrap">
+  <h2><i class="fa-solid fa-file-excel"></i> استيراد الموظفين من ملف إكسيل</h2>
+  <p style="color:#666">الأعمدة المطلوبة في الصف الأول: <code>fingerprint_id, full_name, hire_date</code>
+     (اختياري: national_id, phone, department, job_title)</p>
+
+  <div class="drop-zone" id="dropZone">
+    <i class="fa-solid fa-cloud-arrow-up"></i>
+    <p>اسحب الملف هنا أو اضغط للاختيار (xlsx)</p>
+    <input type="file" id="fileInput" accept=".xlsx" style="display:none">
+  </div>
+
+  <div id="previewSection" style="display:none">
+    <div id="summary"></div>
+    <table class="preview" id="previewTable">
+      <thead><tr id="previewHead"></tr></thead>
+      <tbody id="previewBody"></tbody>
+    </table>
+    <div style="margin-top:16px; display:flex; gap:10px;">
+      <button class="btn" id="confirmBtn"><i class="fa-solid fa-check"></i> تأكيد الاستيراد</button>
+      <button class="btn secondary" id="cancelBtn"><i class="fa-solid fa-xmark"></i> إلغاء</button>
+    </div>
+  </div>
+
+  <div id="resultBox" style="margin-top:20px;"></div>
+</div>
+
+<script>
+function getCookie(name) {
+  const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return v ? v.pop() : '';
+}
+const csrftoken = getCookie('csrftoken');
+let selectedFile = null;
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => e.preventDefault());
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+function handleFile(file) {
+  if (!file) return;
+  selectedFile = file;
+  const formData = new FormData();
+  formData.append('file', file);
+
+  fetch("{% url 'employees:import_preview' %}", {
+    method: 'POST',
+    headers: { 'X-CSRFToken': csrftoken },
+    body: formData,
+  })
+    .then(r => r.json())
+    .then(renderPreview)
+    .catch(() => alert('حدث خطأ أثناء قراءة الملف'));
+}
+
+function renderPreview(data) {
+  const resultBox = document.getElementById('resultBox');
+  resultBox.innerHTML = '';
+  if (!data.ok) {
+    resultBox.innerHTML = `<div class="badge err">${data.error}</div>`;
+    return;
+  }
+  document.getElementById('previewSection').style.display = 'block';
+  document.getElementById('summary').innerHTML =
+    `إجمالي الصفوف: ${data.total} — صفوف بها أخطاء: ${data.rows_with_errors.length}`;
+
+  const cols = Object.keys(data.preview[0]?.data || {});
+  document.getElementById('previewHead').innerHTML =
+    cols.map(c => `<th>${c}</th>`).join('') + '<th>ملاحظات</th>';
+
+  document.getElementById('previewBody').innerHTML = data.preview.map(row => `
+    <tr class="${row.errors.length ? 'row-error' : ''}">
+      ${cols.map(c => `<td>${row.data[c] ?? ''}</td>`).join('')}
+      <td>${row.errors.length
+          ? `<span class="badge err">${row.errors.join('، ')}</span>`
+          : `<span class="badge ok">جاهز</span>`}</td>
+    </tr>`).join('');
+}
+
+document.getElementById('confirmBtn').addEventListener('click', () => {
+  if (!selectedFile) return;
+  const formData = new FormData();
+  formData.append('file', selectedFile);
+  fetch("{% url 'employees:import_commit' %}", {
+    method: 'POST',
+    headers: { 'X-CSRFToken': csrftoken },
+    body: formData,
+  })
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('resultBox').innerHTML = data.ok
+        ? `<div class="badge ok"><i class="fa-solid fa-circle-check"></i> تم إضافة ${data.created} موظف، وتم تجاهل ${data.skipped} صف.</div>`
+        : `<div class="badge err">${data.error}</div>`;
+      document.getElementById('previewSection').style.display = 'none';
+    });
+});
+
+document.getElementById('cancelBtn').addEventListener('click', () => {
+  document.getElementById('previewSection').style.display = 'none';
+  selectedFile = null;
+  fileInput.value = '';
+});
+</script>
+{% endblock %}
